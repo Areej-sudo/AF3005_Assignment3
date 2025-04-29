@@ -122,4 +122,70 @@ def preprocess_data():
             st.write(f"Outliers in {col}: {len(outliers)}")
     
     st.session_state.data = df
+    def feature_engineering():
+    st.header("⚙️ Feature Engineering")
     
+    if 'data' not in st.session_state:
+        st.warning("Please load data first!")
+        return
+
+    df = st.session_state.data
+    
+    # Example: Add moving averages
+    if st.checkbox("Add Moving Averages"):
+        df['MA_10'] = df['Close'].rolling(window=10).mean()
+        df['MA_50'] = df['Close'].rolling(window=50).mean()
+        st.success("Added 10-day & 50-day Moving Averages!")
+
+    # Feature selection interface
+    st.subheader("Select Features")
+    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+    selected_features = st.multiselect(
+        "Choose features for modeling",
+        numeric_cols,
+        default=['Open', 'High', 'Low', 'Volume']
+    )
+    
+    # Save to session state
+    st.session_state.features = selected_features
+    st.session_state.target = 'Close'  # Default target
+    st.session_state.data = df
+    
+    st.dataframe(df.head())
+    def train_test_split():
+    st.header("✂️ Train-Test Split")
+    
+    if 'features' not in st.session_state:
+        st.warning("Do feature engineering first!")
+        return
+
+    test_size = st.slider(
+        "Test Set Size (%)", 
+        min_value=10, 
+        max_value=40, 
+        value=20
+    ) / 100  # Convert to decimal
+
+    X = st.session_state.data[st.session_state.features]
+    y = st.session_state.data[st.session_state.target]
+
+    # Perform split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, 
+        test_size=test_size, 
+        random_state=42
+    )
+    
+    # Save to session state
+    st.session_state.X_train = X_train
+    st.session_state.X_test = X_test
+    st.session_state.y_train = y_train
+    st.session_state.y_test = y_test
+    
+    # Visualize
+    fig = px.pie(
+        names=['Train', 'Test'],
+        values=[len(X_train), len(X_test)],
+        title="Data Split Ratio"
+    )
+    st.plotly_chart(fig)
