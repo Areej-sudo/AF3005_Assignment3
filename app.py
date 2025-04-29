@@ -121,9 +121,35 @@ def preprocess_data():
             outliers = df[(df[col] < (Q1 - 1.5*IQR)) | (df[col] > (Q3 + 1.5*IQR))]
             st.write(f"Outliers in {col}: {len(outliers)}")
     
-    st.session_state.data = df
-    def feature_engineering():
+import streamlit as st
+
+# Initialize session state (do this at the top of your app)
+if 'data' not in st.session_state:
+    st.session_state.data = None  # Initialize empty
+
+def feature_engineering():
     st.header("⚙️ Feature Engineering")
+    
+
+    if st.session_state.data is None:
+        st.warning("Please load data first!")
+        return
+    
+    df = st.session_state.data  # Get data from session state
+    
+    
+    if st.checkbox("Add Moving Average"):
+        df['MA_10'] = df['Close'].rolling(window=10).mean()
+        st.session_state.data = df  # Update session state
+        st.success("Added 10-day Moving Average!")
+    
+  
+    st.dataframe(df.head())
+
+
+if st.session_state.data is not None:  # Only show if data exists
+    if st.button("Run Feature Engineering"):
+        feature_engineering()
     
     if 'data' not in st.session_state:
         st.warning("Please load data first!")
