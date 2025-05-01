@@ -24,7 +24,6 @@ def show_welcome():
     st.title("💰 Financial Machine Learning Dashboard")
     st.markdown("---")
     
-    # Columns for better layout
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -38,8 +37,6 @@ def show_welcome():
         2. Follow the ML pipeline steps
         3. Analyze results
         """)
-        
-    st.success("Ready to begin! Use the sidebar to load data.")
 
 def load_data():
     st.sidebar.header("📥 Data Input Options")
@@ -47,8 +44,7 @@ def load_data():
     # Option 1: File Upload
     uploaded_file = st.sidebar.file_uploader(
         "Upload CSV/Excel File",
-        type=["csv", "xlsx"],
-        help="Supports Kragle datasets"
+        type=["csv", "xlsx"]
     )
     
     # Option 2: Yahoo Finance
@@ -60,14 +56,23 @@ def load_data():
     if st.sidebar.button("Fetch Stock Data"):
         try:
             data = yf.download(ticker, start=start_date, end=end_date)
-            st.session_state.data = data.reset_index()  # Convert index to column
-            st.success(f"Successfully loaded {ticker} data!")
+            if not data.empty:
+                data = data.reset_index()
+                data['Date'] = pd.to_datetime(data['Date'])
+                st.session_state.data = data.set_index('Date')
+                st.success(f"Successfully loaded {ticker} data!")
+            else:
+                st.error("No data returned for this ticker/date range")
         except Exception as e:
             st.error(f"Error: {str(e)}")
     
     if uploaded_file:
         try:
-            st.session_state.data = pd.read_csv(uploaded_file)
+            df = pd.read_csv(uploaded_file)
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date')
+            st.session_state.data = df
             st.success("Dataset loaded successfully!")
         except Exception as e:
             st.error(f"Error loading file: {str(e)}")
@@ -79,7 +84,7 @@ def preprocess_data():
         st.warning("No data loaded yet!")
         return
     
-    df = st.session_state.data
+    df = st.session_state.data.copy()
     
     with st.expander("View Raw Data"):
         st.dataframe(df.head())
@@ -110,15 +115,15 @@ def feature_engineering():
         st.warning("Please load data first!")
         return
     
-    df = st.session_state.data
+    df = st.session_state.data.copy()
     
+    st.subheader("Technical Indicators")
     if st.checkbox("Add Moving Averages"):
         df['MA_10'] = df['Close'].rolling(window=10).mean()
         df['MA_50'] = df['Close'].rolling(window=50).mean()
-        st.session_state.data = df
         st.success("Added 10-day & 50-day Moving Averages!")
     
-    st.subheader("Select Features")
+    st.subheader("Feature Selection")
     numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
     selected_features = st.multiselect(
         "Choose features for modeling",
@@ -127,6 +132,8 @@ def feature_engineering():
     )
     
     st.session_state.features = selected_features
+    st.session_state.data = df
+    
     st.dataframe(df.head())
 
 def perform_train_test_split():
@@ -136,50 +143,104 @@ def perform_train_test_split():
         st.warning("Please load data first!")
         return
         
-    if st.session_state.features is None:
+    if not st.session_state.features:
         st.warning("Please select features in Feature Engineering step!")
         return
 
     df = st.session_state.data
-    features = st.session_state.features
-    target = st.session_state.target
     
-    test_size = st.slider(
-        "Test Set Size (%)", 
-        min_value=10, 
-        max_value=40, 
-        value=20
-    ) / 100
+    # Data validation
+    if len(df) < 10:
+        st.error(f"Not enough data! Only {len(df)} rows available. Need at least 10.")
+        return
     
-    X = df[features]
-    y = df[target]
+    try:
+        X = df[st.session_state.features].apply(pd.to_numeric)
+        y = pd.to_numeric(df[st.session_state.target])
+    except Exception as e:
+        st.error(f"Non-numeric data detected: {str(e)}")
+        return
     
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, 
-        test_size=test_size, 
-        random_state=42
-    )
+    test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
     
-    st.session_state.X_train = X_train
-    st.session_state.X_test = X_test
-    st.session_state.y_train = y_train
-    st.session_state.y_test = y_test
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, 
+            test_size=test_size,
+            random_state=42
+        )
+    except ValueError as e:
+        st.error(f"Split failed: {str(e)}")
+        return
     
-    st.success(f"Split complete! Train: {len(X_train)} samples, Test: {len(X_test)} samples")
+    st.session_state.update({
+        'X_train': X_train,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_test': y_test
+    })
     
-    fig = px.pie(
-        names=['Train', 'Test'],
-        values=[len(X_train), len(X_test)],
-        title="Data Split Ratio"
-    )
-    st.plotly_chart(fig)
+    st.success(f"Split successful! Train: {len(X_train)}, Test: {len(X_test)}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        fig1 = px.line(df, y=st.session_state.target, title="Price Trend")
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        fig2 = px.pie(names=['Train', 'Test'], 
+                     values=[len(X_train), len(X_test)],
+                     title="Split Ratio")
+        st.plotly_chart(fig2, use_container_width=True)
+
+def train_model():
+    st.header("🤖 Model Training")
+    
+    if not all(key in st.session_state for key in ['X_train', 'y_train']):
+        st.warning("Please complete train-test split first!")
+        return
+    
+    if st.button("Train Linear Regression Model"):
+        try:
+            model = LinearRegression()
+            model.fit(st.session_state.X_train, st.session_state.y_train)
+            st.session_state.model = model
+            
+            # Calculate R-squared score
+            train_score = model.score(st.session_state.X_train, st.session_state.y_train)
+            test_score = model.score(st.session_state.X_test, st.session_state.y_test)
+            
+            st.success(f"""
+            Model trained successfully!
+            - Training R²: {train_score:.2f}
+            - Testing R²: {test_score:.2f}
+            """)
+            
+            # Visualize predictions vs actual
+            fig = px.scatter(
+                x=st.session_state.y_test,
+                y=model.predict(st.session_state.X_test),
+                labels={'x': 'Actual', 'y': 'Predicted'},
+                title="Actual vs Predicted Values"
+            )
+            fig.add_shape(type='line', x0=min(st.session_state.y_test), y0=min(st.session_state.y_test),
+                         x1=max(st.session_state.y_test), y1=max(st.session_state.y_test))
+            st.plotly_chart(fig)
+            
+        except Exception as e:
+            st.error(f"Training failed: {str(e)}")
 
 # Main app flow
 show_welcome()
 load_data()
 
 if st.session_state.data is not None:
-    tab1, tab2, tab3, tab4 = st.tabs(["Preprocessing", "Feature Engineering", "Train-Test Split", "Model Training"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Preprocessing", 
+        "Feature Engineering", 
+        "Train-Test Split", 
+        "Model Training"
+    ])
     
     with tab1:
         preprocess_data()
@@ -191,12 +252,4 @@ if st.session_state.data is not None:
         perform_train_test_split()
     
     with tab4:
-        st.header("🤖 Model Training")
-        if st.button("Train Linear Regression Model"):
-            if hasattr(st.session_state, 'X_train'):
-                model = LinearRegression()
-                model.fit(st.session_state.X_train, st.session_state.y_train)
-                st.session_state.model = model
-                st.success("Model trained successfully!")
-            else:
-                st.warning("Please complete train-test split first!")
+        train_model()
