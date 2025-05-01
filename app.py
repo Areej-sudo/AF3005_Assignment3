@@ -4,6 +4,7 @@ import yfinance as yf
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 import plotly.express as px
+from datetime import datetime
 
 # Configure page
 st.set_page_config(
@@ -49,22 +50,34 @@ def load_data():
     
     # Option 2: Yahoo Finance
     st.sidebar.subheader("OR Fetch Live Data")
-    ticker = st.sidebar.text_input("Stock Symbol (e.g., AAPL)", "AAPL")
-    start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
-    end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-12-31"))
+    ticker = st.sidebar.text_input("Stock Symbol (e.g., AAPL)", "AAPL").strip()
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        start_date = st.date_input("Start Date", datetime(2020, 1, 1))
+    with col2:
+        end_date = st.date_input("End Date", datetime(2023, 12, 31))
     
     if st.sidebar.button("Fetch Stock Data"):
+        if not ticker:
+            st.error("Please enter a stock symbol")
+            return
+            
         try:
-            data = yf.download(ticker, start=start_date, end=end_date)
-            if not data.empty:
+            with st.spinner(f"Fetching {ticker} data..."):
+                data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                
+            if data.empty:
+                st.error("No data returned for this ticker/date range. Try different dates or symbol.")
+            else:
                 data = data.reset_index()
                 data['Date'] = pd.to_datetime(data['Date'])
-                st.session_state.data = data.set_index('Date')
-                st.success(f"Successfully loaded {ticker} data!")
-            else:
-                st.error("No data returned for this ticker/date range")
+                data = data.set_index('Date')
+                st.session_state.data = data
+                st.success(f"Successfully loaded {ticker} data from {start_date} to {end_date}")
+                st.dataframe(data.head())
+                
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"Error fetching data: {str(e)}")
     
     if uploaded_file:
         try:
@@ -74,6 +87,7 @@ def load_data():
                 df = df.set_index('Date')
             st.session_state.data = df
             st.success("Dataset loaded successfully!")
+            st.dataframe(df.head())
         except Exception as e:
             st.error(f"Error loading file: {str(e)}")
 
@@ -128,7 +142,7 @@ def feature_engineering():
     selected_features = st.multiselect(
         "Choose features for modeling",
         numeric_cols,
-        default=['Open', 'High', 'Low', 'Volume']
+        default=['Open', 'High', 'Low', 'Volume', 'MA_10', 'MA_50'] if 'MA_10' in df.columns else ['Open', 'High', 'Low', 'Volume']
     )
     
     st.session_state.features = selected_features
@@ -149,7 +163,6 @@ def perform_train_test_split():
 
     df = st.session_state.data
     
-    # Data validation
     if len(df) < 10:
         st.error(f"Not enough data! Only {len(df)} rows available. Need at least 10.")
         return
@@ -206,7 +219,6 @@ def train_model():
             model.fit(st.session_state.X_train, st.session_state.y_train)
             st.session_state.model = model
             
-            # Calculate R-squared score
             train_score = model.score(st.session_state.X_train, st.session_state.y_train)
             test_score = model.score(st.session_state.X_test, st.session_state.y_test)
             
@@ -216,7 +228,6 @@ def train_model():
             - Testing R²: {test_score:.2f}
             """)
             
-            # Visualize predictions vs actual
             fig = px.scatter(
                 x=st.session_state.y_test,
                 y=model.predict(st.session_state.X_test),
@@ -253,3 +264,5 @@ if st.session_state.data is not None:
     
     with tab4:
         train_model()
+else:
+    st.info("Please load data using the sidebar options to begin analysis")
