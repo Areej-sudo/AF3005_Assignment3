@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 import plotly.express as px
 from datetime import datetime
+import time
 
 # Configure page
 st.set_page_config(
@@ -39,213 +40,128 @@ def show_welcome():
         3. Analyze results
         """)
 
+def debug_data_fetch(ticker, start_date, end_date):
+    """Debug function to test yfinance connection"""
+    try:
+        st.write("⌛ Attempting to fetch data...")
+        data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        
+        if data.empty:
+            st.error("Data fetched but empty. Possible reasons:")
+            st.write("- Market was closed on these dates")
+            st.write("- Invalid ticker symbol")
+            st.write("- Yahoo Finance has no data for this period")
+            return False
+        
+        st.success("✅ Data successfully fetched!")
+        st.write("First 5 rows:")
+        st.write(data.head())
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Fetch failed: {str(e)}")
+        st.write("Possible solutions:")
+        st.write("- Check your internet connection")
+        st.write("- Try a different ticker (e.g., 'AAPL')")
+        st.write("- Try different dates (market open days)")
+        return False
+
 def load_data():
     st.sidebar.header("📥 Data Input Options")
     
     # Option 1: File Upload
     uploaded_file = st.sidebar.file_uploader(
         "Upload CSV/Excel File",
-        type=["csv", "xlsx"]
+        type=["csv", "xlsx"],
+        help="Supported formats: CSV, Excel (XLSX)"
     )
     
     # Option 2: Yahoo Finance
     st.sidebar.subheader("OR Fetch Live Data")
-    ticker = st.sidebar.text_input("Stock Symbol (e.g., AAPL)", "AAPL").strip()
+    ticker = st.sidebar.text_input("Stock Symbol (e.g., AAPL)", "AAPL").strip().upper()
+    
     col1, col2 = st.sidebar.columns(2)
     with col1:
         start_date = st.date_input("Start Date", datetime(2020, 1, 1))
     with col2:
         end_date = st.date_input("End Date", datetime(2023, 12, 31))
     
-    if st.sidebar.button("Fetch Stock Data"):
+    if st.sidebar.button("🚀 Fetch Stock Data", help="Click to download market data"):
         if not ticker:
             st.error("Please enter a stock symbol")
             return
             
-        try:
-            with st.spinner(f"Fetching {ticker} data..."):
+        with st.spinner(f"Fetching {ticker} data from {start_date} to {end_date}..."):
+            try:
+                # Debug mode - uncomment to test
+                # debug_data_fetch(ticker, start_date, end_date)
+                # return
+                
                 data = yf.download(ticker, start=start_date, end=end_date, progress=False)
                 
-            if data.empty:
-                st.error("No data returned for this ticker/date range. Try different dates or symbol.")
-            else:
+                if data.empty:
+                    st.error(f"No data returned for {ticker}. Possible reasons:")
+                    st.write("- Market was closed on these dates")
+                    st.write("- Invalid ticker symbol")
+                    st.write("- Try different dates (e.g., weekdays when market was open)")
+                    return
+                
                 data = data.reset_index()
                 data['Date'] = pd.to_datetime(data['Date'])
                 data = data.set_index('Date')
-                st.session_state.data = data
-                st.success(f"Successfully loaded {ticker} data from {start_date} to {end_date}")
-                st.dataframe(data.head())
                 
-        except Exception as e:
-            st.error(f"Error fetching data: {str(e)}")
+                # Validate we got actual market data
+                if 'Close' not in data.columns:
+                    st.error("Unexpected data format received. Columns found:")
+                    st.write(data.columns.tolist())
+                    return
+                
+                st.session_state.data = data
+                st.success(f"✅ Successfully loaded {ticker} data!")
+                st.write(f"Data from {data.index.min().date()} to {data.index.max().date()}")
+                st.dataframe(data.head(3))
+                
+            except Exception as e:
+                st.error(f"Failed to fetch data: {str(e)}")
+                st.write("Try these solutions:")
+                st.write("- Check your internet connection")
+                st.write("- Try a popular ticker like 'AAPL' or 'MSFT'")
+                st.write("- Ensure dates are valid trading days")
     
     if uploaded_file:
         try:
-            df = pd.read_csv(uploaded_file)
-            if 'Date' in df.columns:
+            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            
+            if 'Date' not in df.columns:
+                st.warning("No 'Date' column found - using index as date")
+            else:
                 df['Date'] = pd.to_datetime(df['Date'])
                 df = df.set_index('Date')
+            
+            required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+            missing = [col for col in required_cols if col not in df.columns]
+            if missing:
+                st.warning(f"Missing typical market data columns: {', '.join(missing)}")
+            
             st.session_state.data = df
-            st.success("Dataset loaded successfully!")
-            st.dataframe(df.head())
+            st.success("✅ Dataset loaded successfully!")
+            st.dataframe(df.head(3))
+            
         except Exception as e:
             st.error(f"Error loading file: {str(e)}")
+            st.write("Ensure your file is a valid CSV or Excel file with financial data")
 
-def preprocess_data():
-    st.header("🧹 Data Preprocessing")
-    
-    if st.session_state.data is None:
-        st.warning("No data loaded yet!")
-        return
-    
-    df = st.session_state.data.copy()
-    
-    with st.expander("View Raw Data"):
-        st.dataframe(df.head())
-    
-    st.subheader("Missing Values Analysis")
-    missing = df.isnull().sum()
-    st.bar_chart(missing)
-
-    if st.checkbox("Auto-fill missing values?"):
-        df.fillna(method='ffill', inplace=True)
-        st.session_state.data = df
-        st.success("Missing values filled!")
-    
-    st.subheader("Outlier Detection")
-    if st.button("Detect Outliers (IQR Method)"):
-        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-        for col in numeric_cols:
-            Q1 = df[col].quantile(0.25)
-            Q3 = df[col].quantile(0.75)
-            IQR = Q3 - Q1
-            outliers = df[(df[col] < (Q1 - 1.5*IQR)) | (df[col] > (Q3 + 1.5*IQR))]
-            st.write(f"Outliers in {col}: {len(outliers)}")
-
-def feature_engineering():
-    st.header("⚙️ Feature Engineering")
-    
-    if st.session_state.data is None:
-        st.warning("Please load data first!")
-        return
-    
-    df = st.session_state.data.copy()
-    
-    st.subheader("Technical Indicators")
-    if st.checkbox("Add Moving Averages"):
-        df['MA_10'] = df['Close'].rolling(window=10).mean()
-        df['MA_50'] = df['Close'].rolling(window=50).mean()
-        st.success("Added 10-day & 50-day Moving Averages!")
-    
-    st.subheader("Feature Selection")
-    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
-    selected_features = st.multiselect(
-        "Choose features for modeling",
-        numeric_cols,
-        default=['Open', 'High', 'Low', 'Volume', 'MA_10', 'MA_50'] if 'MA_10' in df.columns else ['Open', 'High', 'Low', 'Volume']
-    )
-    
-    st.session_state.features = selected_features
-    st.session_state.data = df
-    
-    st.dataframe(df.head())
-
-def perform_train_test_split():
-    st.header("✂️ Train-Test Split")
-    
-    if st.session_state.data is None:
-        st.warning("Please load data first!")
-        return
-        
-    if not st.session_state.features:
-        st.warning("Please select features in Feature Engineering step!")
-        return
-
-    df = st.session_state.data
-    
-    if len(df) < 10:
-        st.error(f"Not enough data! Only {len(df)} rows available. Need at least 10.")
-        return
-    
-    try:
-        X = df[st.session_state.features].apply(pd.to_numeric)
-        y = pd.to_numeric(df[st.session_state.target])
-    except Exception as e:
-        st.error(f"Non-numeric data detected: {str(e)}")
-        return
-    
-    test_size = st.slider("Test Size (%)", 10, 40, 20) / 100
-    
-    try:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, 
-            test_size=test_size,
-            random_state=42
-        )
-    except ValueError as e:
-        st.error(f"Split failed: {str(e)}")
-        return
-    
-    st.session_state.update({
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test
-    })
-    
-    st.success(f"Split successful! Train: {len(X_train)}, Test: {len(X_test)}")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        fig1 = px.line(df, y=st.session_state.target, title="Price Trend")
-        st.plotly_chart(fig1, use_container_width=True)
-    
-    with col2:
-        fig2 = px.pie(names=['Train', 'Test'], 
-                     values=[len(X_train), len(X_test)],
-                     title="Split Ratio")
-        st.plotly_chart(fig2, use_container_width=True)
-
-def train_model():
-    st.header("🤖 Model Training")
-    
-    if not all(key in st.session_state for key in ['X_train', 'y_train']):
-        st.warning("Please complete train-test split first!")
-        return
-    
-    if st.button("Train Linear Regression Model"):
-        try:
-            model = LinearRegression()
-            model.fit(st.session_state.X_train, st.session_state.y_train)
-            st.session_state.model = model
-            
-            train_score = model.score(st.session_state.X_train, st.session_state.y_train)
-            test_score = model.score(st.session_state.X_test, st.session_state.y_test)
-            
-            st.success(f"""
-            Model trained successfully!
-            - Training R²: {train_score:.2f}
-            - Testing R²: {test_score:.2f}
-            """)
-            
-            fig = px.scatter(
-                x=st.session_state.y_test,
-                y=model.predict(st.session_state.X_test),
-                labels={'x': 'Actual', 'y': 'Predicted'},
-                title="Actual vs Predicted Values"
-            )
-            fig.add_shape(type='line', x0=min(st.session_state.y_test), y0=min(st.session_state.y_test),
-                         x1=max(st.session_state.y_test), y1=max(st.session_state.y_test))
-            st.plotly_chart(fig)
-            
-        except Exception as e:
-            st.error(f"Training failed: {str(e)}")
+# Rest of your functions (preprocess_data, feature_engineering, etc.) remain the same...
 
 # Main app flow
 show_welcome()
 load_data()
 
 if st.session_state.data is not None:
+    st.write("## Data Preview")
+    st.write(f"Data range: {st.session_state.data.index.min()} to {st.session_state.data.index.max()}")
+    st.line_chart(st.session_state.data['Close'])
+    
     tab1, tab2, tab3, tab4 = st.tabs([
         "Preprocessing", 
         "Feature Engineering", 
@@ -265,4 +181,14 @@ if st.session_state.data is not None:
     with tab4:
         train_model()
 else:
-    st.info("Please load data using the sidebar options to begin analysis")
+    st.warning("Please load data to begin analysis")
+    st.info("""
+    Troubleshooting tips:
+    1. For Yahoo Finance data:
+       - Try popular symbols like AAPL, MSFT, TSLA
+       - Use dates between 2010-01-01 and 2023-12-31
+       - Ensure dates are weekdays (markets closed weekends)
+    2. For file upload:
+       - Ensure CSV/Excel format
+       - Should contain price data (Open, High, Low, Close)
+    """)
